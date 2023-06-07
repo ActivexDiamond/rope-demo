@@ -16,10 +16,10 @@ function Stick:update(dt)
 	local center = (self.p1.pos + self.p2.pos) / 2
 	local dir = (self.p1.pos - self.p2.pos).normalized
 	if not self.p1.locked then
-		self.p1.pos = center + dir * self.length / 2
+		self.p1:move( center + dir * self.length / 2)
 	end
 	if not self.p2.locked then
-		self.p2.pos = center - dir * self.length / 2
+		self.p2:move(center - dir * self.length / 2)
 	end
 end
 
