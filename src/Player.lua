@@ -10,17 +10,19 @@ function Player:initialize(rope, pos, keybinds)
 	self.pos = pos
 	self.w = GLOBAL.PLAYER_SIZE
 	self.h = GLOBAL.PLAYER_SIZE
+	self.size = GLOBAL.PLAYER_SIZE
 	
 	self.vel = Vector(0, 0)
 	self.keybinds = keybinds
 	self.speed = GLOBAL.PLAYER_SPEED
-	
 	if self.keybinds == GLOBAL.KEYBINDS_P1 then
 		self.targetPoint = #self.rope.points
 	else
 		self.targetPoint = 1
 	end
 	self.CENTER_OFFSET_VECTOR = Vector(self.w / 2, self.h / 2)
+	
+	GLOBAL.WORLD:add(self, self.pos.x, self.pos.y, self.w, self.h)
 end
 
 ------------------------------ Core API ------------------------------
@@ -49,13 +51,15 @@ function Player:update(dt)
 	local a, b =  self.vel, other.pos - self.pos
 	local towardsOther = math.acos(a:dot(b) / (a.length * b.length))
 	towardsOther = math.deg(towardsOther)
-	print(towardsOther, '\t|', self.rope:getTautness())
+--	print(towardsOther, '\t|', self.rope:getTautness())
 	
 	--If rope is loose enough to allow movement OR moving towards other player; move freely.
 	if self.rope:getTautness() < GLOBAL.MAX_TAUTNESS or
 			towardsOther < 90 then
-		self.rope:movePoint(self.targetPoint, self.pos + self.vel)
-		self.pos = self.pos + self.vel
+		local targetPos = self.pos + self.vel
+		local newX, newY, cols = GLOBAL.WORLD:move(self, targetPos.x, targetPos.y)
+		self.pos = Vector(newX, newY)
+		self.rope:movePoint(self.targetPoint, self.pos)
 	else --Else, just maintain point at current pos to keep rope from weird jittering.
 		self.rope:movePoint(self.targetPoint, self.pos + self.CENTER_OFFSET_VECTOR)
 	end

@@ -1,3 +1,4 @@
+	
 ------------------------------ Env Setup ------------------------------
 io.stdout:setvbuf('no')
 print(love.getVersion())
@@ -8,12 +9,13 @@ local Vector = require "libs.Vector"
 local Rope = require "Rope"
 local Player = require "Player"
 
+local bump = require "libs.bump"
+
 ------------------------------ Helpers ------------------------------
 local BLANK_ROPE = {
 	update = function() end,
 	draw = function () end,
 	points = {},
-	STRETCH_FACTOR = 0,
 	movePoint = function() end,
 	addPoint = function() end,
 
@@ -23,7 +25,7 @@ local createPoint, spawnPlayers
 local lastTime = love.timer.getTime()
 
 ------------------------------ State ------------------------------
-local actionFailedSfx;
+local actionFailedSfx, font;
 
 --local PLAYER1, PLAYER2
 
@@ -37,6 +39,9 @@ local rope = BLANK_ROPE
 GLOBAL = {
 	VERSION = "0.3.0-dev",
 
+	--Physics
+	WORLD = bump.newWorld(),
+	
 	--Player
 	PLAYER_SIZE = 32,
 	PLAYER_SPEED = 5,
@@ -76,9 +81,10 @@ local function setExample1()
 	rope = Rope()
 	createPoint(x, y, true)
 	for i = 1, 100 do
-		createPoint(x + i^ xoff, y + i * yoff, nil, true)
+		createPoint(x + i^ xoff, y + i * yoff, false, true)
 	end
-	spawnPlayers()
+	createPoint(x + 101^ xoff, y + 101 * yoff, true, true)
+--	spawnPlayers()
 	print("Points: ", #rope.points)
 end
 
@@ -100,6 +106,9 @@ end
 
 function spawnPlayers()
 	if PLAYER1 or PLAYER2 then
+		GLOBAL.WORLD:remove(PLAYER1)
+		GLOBAL.WORLD:remove(PLAYER2)
+		
 		PLAYER1 = nil
 		PLAYER2 = nil
 	else
@@ -111,9 +120,24 @@ function spawnPlayers()
 	end
 end
 
+local function reset()
+	if PLAYER1 then
+		GLOBAL.WORLD:remove(PLAYER1)
+		PLAYER1 = nil
+	end
+	if PLAYER2 then
+		GLOBAL.WORLD:remove(PLAYER2)
+		PLAYER2 = nil
+	end
+	rope = BLANK_ROPE
+	GLOBAL.WORLD = bump.newWorld()
+end
+
 ------------------------------ Init ------------------------------
 function love.load()
 	actionFailedSfx = love.audio.newSource("assets/sfx/action_failed.wav", 'static')
+	font = love.graphics.newFont("assets/fonts/roboto_mono/RobotoMono-Regular.ttf")
+	love.graphics.setFont(font)
 	rope = Rope()
 end
 
@@ -143,25 +167,34 @@ function love.draw()
 	
 	g2d.push('all')
 	g2d.setColor(GLOBAL.BLOCK_COLOR)
-	for _, v in ipairs(entities) do
-		g2d.rectangle('fill', v.pos.x, v.pos.y, v.size, v.size)
+	for _, obj in ipairs(GLOBAL.WORLD:getItems()) do
+		if obj == PLAYER1 or obj == PLAYER2 then
+			obj:draw(g2d)
+		else
+			g2d.rectangle('fill', obj.pos.x, obj.pos.y, obj.size, obj.size)
+			local halfSize = obj.size * 0.5
+			local colCenter = Vector(obj.pos.x + halfSize, obj.pos.y + halfSize)
+			g2d.push('all')
+			g2d.setColor(1, 0, 0)
+			g2d.rectangle('fill', colCenter.x, colCenter.y, halfSize, halfSize)
+			g2d.pop()
+				
+		end
 	end
 	g2d.pop()
 	
-	-- Draw rope and players.
+	-- Draw rope.
 	rope:draw(g2d)
-	if PLAYER1 then PLAYER1:draw(g2d) end
-	if PLAYER2 then PLAYER2:draw(g2d) end
 	
 	-- HUD
 	if showHelp then
 		local x = 0
-		local y = SCREEN_HEIGHT - 160
+		local y = SCREEN_HEIGHT - 280
 		local lineHeight = 20
 		local lineOffset = 0
 		g2d.print("===== Controls ===== ", x, y)
 		lineOffset = lineOffset + lineHeight	
-		g2d.print("LMB             -> Place point.", x, y + lineOffset)
+		g2d.print("LMB         -> Place point.", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
 		g2d.print("LMB + Shift -> Place locked point.", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
@@ -169,29 +202,26 @@ function love.draw()
 		lineOffset = lineOffset + lineHeight
 		g2d.print("(You can use Shift+Ctrl simultaneously.", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
-		g2d.print("R              -> Clear world.", x, y + lineOffset)
+		g2d.print("R           -> Clear world.", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
 		g2d.print("Space       -> Simulate.", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
-		g2d.print("H              -> Toggle help.", x, y + lineOffset)
+		g2d.print("H           -> Toggle help.", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
-		g2d.print("1-9            -> Set example.", x, y + lineOffset)
+		g2d.print("1-9         -> Set example.", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
-		g2d.print("C              -> Toggle draw point.", x, y + lineOffset)
+		g2d.print("C           -> Toggle draw point.", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
-		g2d.print("P              -> Toggle spawn players.", x, y + lineOffset)						
+		g2d.print("P           -> Toggle spawn players.", x, y + lineOffset)						
 		lineOffset = lineOffset + lineHeight
-		g2d.print("WASD           -> Move player 1 (red).", x, y + lineOffset)
+		g2d.print("WASD        -> Move player 1 (red).", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
-		g2d.print("Arrow Keys     -> Move player 2 (yellow).", x, y + lineOffset)
+		g2d.print("Arrow Keys  -> Move player 2 (yellow).", x, y + lineOffset)
 		lineOffset = lineOffset + lineHeight
-		g2d.print("F [Hold]       -> Make last point follow mouse.", x, y + lineOffset)
-		lineOffset = lineOffset + lineHeight
-		g2d.print("P              -> Toggle spawn players.", x, y + lineOffset)				
+		g2d.print("F [Hold]    -> Make last point follow mouse.", x, y + lineOffset)
 	end
 	g2d.print("rope-demo", 0, 0)
 	g2d.print(GLOBAL.VERSION, 0, 20)
-	g2d.print("Tautness: " .. rope.STRETCH_FACTOR, 0, 40)
 	g2d.print("Points: " .. #rope.points, 0, 60)
 	g2d.print("FPS: " .. love.timer.getFPS(), 0, 80)
 	
@@ -206,8 +236,7 @@ function love.keypressed(key, code, rpt)
 	if key == 'escape' then
 		love.event.quit()
 	elseif key == 'r' then
-		PLAYER1 = nil
-		PLAYER2 = nil
+		reset()
 		rope = Rope()
 	elseif key == 'h' then
 		showHelp = not showHelp
@@ -216,27 +245,23 @@ function love.keypressed(key, code, rpt)
 	elseif key == 'p' then
 		spawnPlayers()
 	elseif key == '1' then
-		PLAYER1 = nil
-		PLAYER2 = nil
-		rope = BLANK_ROPE
+		reset()
 		setExample1()
 	elseif key == '2' then
-		PLAYER1 = nil
-		PLAYER2 = nil
-		rope = BLANK_ROPE
+		reset()
 		setExample2()
 	end
 end
 
 function love.wheelmoved(x,y)
-	rope.STRETCH_FACTOR = math.max(0, rope.STRETCH_FACTOR + y)
 end
 
 function love.mousepressed(x, y, button, isTouch)
 	if button == 1 then
 		createPoint(x, y)
 	elseif button == 2 then
-		table.insert(entities, {pos = Vector(x, y), size = GLOBAL.BLOCK_SIZE})
+		local ent = {pos = Vector(x, y), size = GLOBAL.BLOCK_SIZE}
+		GLOBAL.WORLD:add(ent, ent.pos.x, ent.pos.y, ent.size, ent.size)
 	end
 end
 

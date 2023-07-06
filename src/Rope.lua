@@ -1,5 +1,9 @@
-local middleclass = require "libs.middleclass"
+local middleclass = require "libs.middleclass"		
 local Vector = require "libs.Vector"
+local inspect = require "libs.inspect"
+
+------------------------------ Localised Functions ------------------------------
+local abs = math.abs
 
 ------------------------------ Fallbacks ------------------------------
 local DEFAULT = {
@@ -9,18 +13,29 @@ local DEFAULT = {
 	STICK_COLOR = {0, 0, 0},
 	STICK_THICKNESS = 4,
 
-	
 	--Physics
 	POINT_SIZE = 5,
 	GRAVITY_VECTOR = Vector(0, 10),
-
+	--Max collisions per `update` for the whole rope.
+--	MAX_ROPE_COLLISIONS = 32,
+	--Area to check around each point for collisions.
+	--Higher numbers reduce tunneling and handle high speeds better. Lower number perform better.
+	SNAPSHOT_RADIUS = 500,
+	--Max collisions per `update` for the each point.
+--	MAX_POINT_COLLISIONS = 8,
+	--Simulation
+	LENGTH = 2,
+	CONSTRAINT_FIRST_TO_LAST_NDOE = false,
 	--Lower numbers increase rope stretchiness. Increases performance significantly.
 	STICK_ADJUST_ITERATIONS = 80,
 	
-	STRETCH_FACTOR = 8,
-	LENGTH = 2
 }
 
+
+------------------------------ Helpers ------------------------------
+local function sign(x)
+	return x >= 0 and 1 or -1 
+end
 
 ------------------------------ Constructor ------------------------------
 local Rope = middleclass("Rope")
@@ -46,10 +61,12 @@ function Rope:initialize(points, locked, opt)
 	self.currentLength = 0
 	self.targetLength = 0
 end
-
 ------------------------------ Core API ------------------------------
 function Rope:update(dt)
-	--Update points positions and Verletintegration.	
+	--Fetch snapshot of the physics world for later use.
+	local snapshot = self:_snapshotPhysicsWorld()
+
+	--Update points positions and perform Verlet integration.	
 	for k, p in ipairs(self.points) do
 		--Skip locked points.
 		if self.locked[k] then goto continue end
@@ -66,8 +83,11 @@ function Rope:update(dt)
 			self.moves[k] = nil
 		end
 		--Apply gravity and clamp to window, and update point.
-		self.points[k] = (p + self.GRAVITY_VECTOR * dt):
-				clamp(self.SCREEN_TOP_LEFT_VECTOR, self.SCREEN_BOTTOM_RIGHT_VECTOR)
+		p = (p + self.GRAVITY_VECTOR * dt)
+			:clamp(self.SCREEN_TOP_LEFT_VECTOR, self.SCREEN_BOTTOM_RIGHT_VECTOR)
+			
+		self.points[k].x = p.x
+		self.points[k].y = p.y
 		
 		--Needed for verlet integration. 
 		self.lasts[k] = oldPos
@@ -76,6 +96,7 @@ function Rope:update(dt)
 	
 	--Apply constraints
 	for i = 1, self.STICK_ADJUST_ITERATIONS do
+		--Adjust stick positions.
 		for i = 1, #self.points - 1 do
 			local p1 = self.points[i]
 			local p2 = self.points[i + 1]
@@ -88,28 +109,56 @@ function Rope:update(dt)
 			end
 			
 			if not self.locked[i] then
-				self.points[i] 		= p1 + diff * (0.5 * dDist)
+				local temp = p1 + diff * (0.5 * dDist)
+				p1.x, p1.y = temp.x, temp.y
 			end
 			if not self.locked[i + 1] then
-				self.points[i + 1] 	= p2 - diff * (0.5 * dDist)
+				local temp = p2 - diff * (0.5 * dDist)
+				p2.x, p2.y = temp.x, temp.y
 			end
 		end
 		if love.keyboard.isDown('f') then
-			self.points[#self.points] = Vector(love.mouse.getPosition())
+			local temp = Vector(love.mouse.getPosition())
+			self.points[#self.points].x = temp.x
+			self.points[#self.points].y = temp.y
 		end
 
-		--[[
-		local first = self.points[1]
-		local last = self.points[#self.points]
-		local dist = (first - last).length
-		local ropeLen = self.LENGTH * #self.points
-		if dist > 0 and dist > ropeLen then
-			local dir = (last - first).normalized
-			self.points[#self.points] = first + ropeLen * dir
+		if self.CONSTRAINT_FIRST_TO_LAST_NDOE then
+			local first = self.points[1]
+			local last = self.points[#self.points]
+			local dist = (first - last).length
+			local ropeLen = self.LENGTH * #self.points
+			if dist > 0 and dist > ropeLen then
+				local dir = (last - first).normalized
+				self.points[#self.points] = first + ropeLen * dir
+			end
 		end
-		--]]
-	end
-	
+		--Adjust for collisions.
+		for col, pts in pairs(snapshot) do
+			local halfSize = col.size * 0.5
+			local colCenter = Vector(col.pos.x + halfSize, col.pos.y + halfSize)
+			for _, p in ipairs(pts) do
+				local pRel = p - colCenter
+
+				local px = halfSize - abs(pRel.x)
+				if px <= 0 then goto continue end --Check that we are actually colliding. 
+				local py = halfSize - abs(pRel.y)
+				if py <= 0 then goto continue end --Check that we are actually colliding.
+				
+				--Push point out to the nearest edge.
+				if px < py then
+					p.x = colCenter.x + halfSize * sign(pRel.x)
+				else
+					p.y = colCenter.y + halfSize * sign(pRel.y)
+				end
+				::continue::
+			end
+--			for k, p in ipairs(self.points) do
+--				if p.x == 300 and p.y == 300 then print("found", k) end
+--			end 
+		end
+	end --end of ADJUST_ITERS loop
+
 	--Calculate current length.
 	local len = 0
 	for i = 1, #self.points - 1 do
@@ -124,16 +173,19 @@ end
 
 function Rope:draw(g2d)
 	g2d.push('all')
-	
+	for k, p in ipairs(self.points) do
+--		print(p)
+	end
 	--Draw points.
 	if GLOBAL.DRAW_POINTS then
 		g2d.setColor(self.POINT_COLOR)
-		for k, v in ipairs(self.points) do
+		for k, p in ipairs(self.points) do
+			print(p)
 			if not self.locked[k] then
-				g2d.rectangle('fill', v.x, v.y, self.POINT_SIZE, self.POINT_SIZE)
+				g2d.rectangle('fill', p.x, p.y, self.POINT_SIZE, self.POINT_SIZE)
 			else
 				g2d.setColor(self.LOCKED_POINT_COLOR)
-				g2d.rectangle('fill', v.x, v.y, self.POINT_SIZE, self.POINT_SIZE)
+				g2d.rectangle('fill', p.x, p.y, self.POINT_SIZE, self.POINT_SIZE)
 				g2d.setColor(self.POINT_COLOR)	
 			end
 		end
@@ -148,6 +200,22 @@ function Rope:draw(g2d)
 	end
 	
 	g2d.pop()
+end
+
+------------------------------ Internals ------------------------------
+
+function Rope:_snapshotPhysicsWorld()
+	local t = {}
+	for _, p in ipairs(self.points) do
+		local cols, len = GLOBAL.WORLD:queryRect(p.x, p.y, self.SNAPSHOT_RADIUS, self.SNAPSHOT_RADIUS)
+		for _, col in ipairs(cols) do
+			if not t[col] then t[col] = {} end
+			table.insert(t[col], p)
+		end
+	end
+--	print(inspect(t))
+--	print("==========================")
+	return t
 end
 
 ------------------------------ API ------------------------------
